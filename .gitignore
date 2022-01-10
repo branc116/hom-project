@@ -455,3 +455,6 @@ $RECYCLE.BIN/
 **/o[0-9]*
 **/*.png
 Properties
+imgs*
+resoults*
+Sets/res*

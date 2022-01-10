@@ -1,49 +1,42 @@
-﻿Console.WriteLine( (args[0], args[1]) );
-RunInstance( args[0], args[1] );
+﻿Help.Instance = args[3];
+Help.Log( (args[0], args[1]) );
+RunInstance( args[0], args[1], args[3] );
 
-void RunInstance( string pathIn, string pathOut ) {
-    //var oggame =Help.GetGame( args[0] );
-    var best_route = new List<Route>();
-    var trucks = int.MaxValue;
-    Game? best_game = null;
+void RunInstance( string pathIn, string pathOut, string instance ) {
     
-    for ( int k = 0 ; k < 10 ; k++ ) {
-        var midPoints = new List<Point>();
-        var game = Help.GetGame( args[0] );
-        var ogGame = game;
-        var i = 1;
-        var outstr = "";
-        var dt = 0.0;
-        var cr = new List<Route>();
-        while ( game.Cs.Length > 1 ) {
-            var route = game.GetBestRoute( double.Parse(args[2]) );
-            game = game.WithoutRout( route );
-            outstr += $"{i}: {route}\n";
-            dt += route.GetDistance( );
-            ++i;
-            cr.Add( route );
-            midPoints.Add( route.MidPoint( ) );
-        }
-        var distMatrix = (from mp1 in midPoints
-                          from mp2 in midPoints
-                          select mp1.DistanceTo(mp2)).ToList();
-        for ( int a = 0 ; a < distMatrix.Count ; ++a ) {
-            var c = cr[a / midPoints.Count];
-            if ( a % midPoints.Count == 0 )
-                Console.WriteLine((c.Customers.Sum(c => c.demand), c.Customers.Count, c.SlackTime()));
-            Console.Write($"{distMatrix[a]:D3} ");
-        }
-        Console.WriteLine( );
-        if ( cr.Count < trucks ) {
-            trucks = cr.Count;
-            best_route = cr;
-            best_game = ogGame;
-        }
-        outstr = $"{i}\n{outstr}\n{dt}\n";
-        //Console.WriteLine( outstr );
+    var heat = double.Parse(args[2]);
+    Game best_game = Help.GetGame( args[0] );
+    var best_route = best_game.GetBestRoutes( heat );
+    
+    var fileName = $"{pathOut}/res_{instance}_1m.txt";
+    File.WriteAllText( fileName, ToString( best_route ) );
+    best_route.Dot( best_game, $"{fileName}.dot" );
+    Help.Log("1 min");
+
+    fileName = $"{pathOut}/res_{instance}_5m.txt";
+    best_route = best_game.LocalSearch( best_route, TimeSpan.FromMinutes( 5 ), heat );
+    File.WriteAllText( fileName, ToString( best_route ) );
+    best_route.Dot( best_game , $"{fileName}.dot" );
+    Help.Log( "5 min" );
+    
+    fileName = $"{pathOut}/res_{instance}_un.txt";
+    best_route = best_game.LocalSearch( best_route, TimeSpan.FromMinutes( 5 ), heat );
+    File.WriteAllText( fileName, ToString( best_route ) );
+    best_route.Dot( best_game , $"{fileName}.dot" );
+
+    var mins = 11;
+    while ( true ) {
+        best_route = best_game.LocalSearch( best_route, TimeSpan.FromMinutes( 1 ), heat );
+        fileName = $"{pathOut}/res_{instance}_{mins}m.txt";
+        best_route.Dot( best_game , $"{fileName}.dot" );
+
+        fileName = $"{pathOut}/res_{instance}_un.txt";
+        File.WriteAllText( fileName, ToString( best_route ) );
+        best_route.Dot( best_game , $"{fileName}.dot" );
+
+        Help.Log( $"min {mins}, " );
+        ++mins;
     }
-    //File.WriteAllText( pathOut, ToString( best_route ) );
-    //best_route.Dot( best_game ?? throw new Exception( "Shit fuck" ), $"{pathOut}.dot" );
 }
 
 string ToString( List<Route> routes ) {
@@ -72,7 +65,11 @@ public record Point( int X, int Y ) {
 }
 public record Customer( int index, Point P,
     int demand, int ReadyTime, int DueDate, int ServiceTime );
-public record Route( List<Customer> Customers ) {
+public class Route {
+    public Route( List<Customer> customers ) {
+        Customers = customers;
+    }
+    public List<Customer> Customers { get; set; }
     public string Details( ) {
         var s = "";
         var time = 0.0;
@@ -126,28 +123,49 @@ public record Route( List<Customer> Customers ) {
             var rt = c.ReadyTime;
             slack += Math.Max( 0, rt - tt - ct );
             ct += Math.Max( ct + tt, rt ) + c.ServiceTime;
-            
         }
+        slack += Customers[0].DueDate - ct;
         return slack;
     }
+    public Route? TryInsertCustomer(Game g, Customer c) {
 
+        var allRoutes = Enumerable.Range( 1, Customers.Count - 2 )
+            .Select( i => Customers
+                .Take( i )
+                .Append( c )
+                .Concat( Customers.Skip( i ) )
+                .ToList( ) );
+        var r = allRoutes
+            .Where( i => g.IsRouteValid( i ) )
+            .MinBy(i => i.Sum(i => i.demand));
+        return r is not null ? new Route(r) : default;
+    }
 }
 public record Game(
     int N,
     int C,
     Customer[] Cs,
     int[][] distances,
-    (int arriveTime, List<int> visited)[] Visited,
+    (int arriveTime, int demand, List<int> visited)[] Visited,
     List<int> locations ) {
     public Game( int N, int C, Customer[] customers ) : this( N, C,
         customers,
         Distances( customers ),
-        customers.Select( c => (int.MaxValue, new List<int>( )) ).ToArray( ),
+        customers.Select( c => (int.MaxValue, 0, new List<int>( )) ).ToArray( ),
         new List<int> { 0 }
     ) {
         Visited[0].visited.Add( 0 );
-        Visited[0] = (0, Visited[0].visited);
-        Console.WriteLine( $"{N} {C}" );
+        Visited[0] = (0, 0, Visited[0].visited);
+    }
+    public List<Route> GetBestRoutes( double heet) {
+        var g = this;
+        var r = new List<Route>();
+        while(g.Cs.Length > 1) {
+            var nr = g.GetBestRoute( heet );
+            r.Add( nr );
+            g = g.WithoutRout( nr );
+        }
+        return r;
     }
     public Route GetBestRoute( double heet ) {
         while ( locations.Any( ) ) {
@@ -157,9 +175,9 @@ public record Game(
     }
     public Game WithoutRout( Route r ) {
         var newCs = Cs.Where( c => c.index == 0 || !r.Customers.Any( rr => rr.index == c.index ) ).ToArray( );
-        var newV = newCs.Select( c => (int.MaxValue, new List<int>( )) ).ToArray( );
-        newV[0].Item2.Add( 0 );
-        newV[0] = (0, newV[0].Item2);
+        var newV = newCs.Select( c => (int.MaxValue, 0, new List<int>( )) ).ToArray( );
+        newV[0].Item3.Add( 0 );
+        newV[0] = (0, 0, newV[0].Item3);
         return this with {
             Cs = newCs,
             distances = Distances( newCs ),
@@ -171,7 +189,7 @@ public record Game(
         var newLocations = new HashSet<int>();
         var heat2 = 1 / ( 1 / heat ) * ( 1 / heat );
         for ( int id = 0 ; id < Cs.Length ; id++ ) {
-            var (old_at, v) = Visited[id];
+            var (old_at, demand, v) = Visited[id];
             if ( old_at > 10e4 )
                 continue;
             for ( var j = 0 ; j < Cs.Length ; ++j ) {
@@ -183,31 +201,27 @@ public record Game(
                 var w = W(old_at, id, j);
                 if ( w > 10e5 )
                     continue;
-                if ( v.Select( p => Cs[p].demand ).Sum( ) + Cs[j].demand > C )
+                if ( demand + Cs[j].demand > C )
                     continue;
 
                 var at = Math.Max(old_at + Cs[id].ServiceTime + distances[id][j], Cs[j].ReadyTime);
+                int count = Visited[j].visited.Count;
                 if (
-                    //Random.Shared.NextDouble( ) < heat && 
                     (
                         (
                             (
-                                Random.Shared.NextDouble( ) > heat && Visited[j].visited.Count == ( v.Count ) ||
-                                Random.Shared.NextDouble( ) > heat2 && Visited[j].visited.Count + 1 == v.Count ||
-                                Visited[j].visited.Count == ( v.Count + 1 )
+                                Random.Shared.NextDouble( ) > heat && count == ( v.Count ) ||
+                                Random.Shared.NextDouble( ) > heat2 && count + 1 == v.Count ||
+                                count == ( v.Count + 1 )
                             ) &&
                             at < Visited[j].arriveTime
                         ) ||
-                        Visited[j].visited.Count < ( v.Count + 1 )
+                        count < ( v.Count + 1 )
                         )
                     ) {
                     var nl = v.Append( j ).ToList( );
                     var at_check =GetArriveTime( nl );
-                    //if ( Math.Abs( at - at_check ) > 0.0001 )
-                    //    throw new Exception( );
-                    //if ( !IsRouteValid( nl ) )
-                    //    throw new Exception( "Shit fuck" );
-                    Visited[j] = (at, nl);
+                    Visited[j] = (at, demand + Cs[j].demand, nl);
                     newLocations.Add( j );
                 }
             }
@@ -218,9 +232,10 @@ public record Game(
     public int W( int ai, int i, int j ) {
         if ( ai > Cs[i].DueDate )
             return int.MaxValue;
-        if ( ai + Cs[i].ServiceTime + distances[i][j] > Cs[j].DueDate )
+        var dist = ai + Cs[i].ServiceTime + distances[i][j];
+        if ( dist > Cs[j].DueDate )
             return int.MaxValue;
-        if ( Math.Max( Cs[j].ReadyTime, ai + Cs[i].ServiceTime + distances[i][j] ) + Cs[j].ServiceTime + distances[j][0] > Cs[0].DueDate )
+        if ( Math.Max( Cs[j].ReadyTime, dist ) + Cs[j].ServiceTime + distances[j][0] > Cs[0].DueDate )
             return int.MaxValue;
         return Math.Max( 0, Cs[j].ReadyTime - ai - Cs[i].ServiceTime ) + distances[i][j];
     }
@@ -261,8 +276,27 @@ public record Game(
         }
         return time < Cs[0].DueDate;
     }
+    public bool IsRouteValid( List<Customer> cs ) {
+        var time = 0.0;
+        var pos = Cs[0].P;
+        var count = cs.Count();
+        for ( var i = 0 ; i < count ; i++ ) {
+            var c = cs[i];
+            time = Math.Max( time + pos.DistanceTo( c.P ), c.ReadyTime );
+            if ( time > c.DueDate )
+                return false;
+            time += c.ServiceTime;
+            pos = c.P;
+        }
+         
+        return time < Cs[0].DueDate && cs.Sum( i => i.demand ) <= C;
+    }
 }
 public static class Help {
+    public static string Instance = "";
+    public static void Log(object obj) {
+        Console.WriteLine($"[{DateTime.Now}][{Instance}]: {obj}");
+    }
     public static Game GetGame( this string path ) {
         var lines = System.IO.File.ReadAllLines(path).Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))
             .Where(s => !s.Any(c => c >= 'A' && c <= 'Z'))
@@ -294,42 +328,78 @@ public static class Help {
         }
         File.WriteAllText( path, ret + "}\n" );
     }
-    public static void WriteDotFileVisited( this Game game, string path ) {
-        string g = "digraph D {\n";
-        var hashSet = new HashSet<(int, int, int)>();
-        for ( int i = 0 ; i < game.Visited.Length ; ++i ) {
-            var (at, v) = game.Visited[i];
-            if ( at > 10e10 )
-                continue;
-            int old = 0;
-            for ( int j = 0 ; j < v.Count ; ++j ) {
-                hashSet.Add( (old, v[j], j) );
-                old = v[j];
+    public static List<Route> LocalSearch(this Game game, List<Route> initSolutions, TimeSpan timeout, double heat = 1.0) {
+        var st = DateTime.Now;
+        var (best, best_d) = (initSolutions.Select(i => new Route(i.Customers.ToList()) ).ToList(), initSolutions.Sum(i => i.GetDistance()));
+        var sinceReset = 0;
+        int swaps = 0;
+        void addIfBetter(List<Route> newRoutes) {
+            var d = initSolutions.Sum(i => i.GetDistance());
+            if ( best.Count > initSolutions.Count || ( best.Count == initSolutions.Count && best_d > d ) ) {
+                best = initSolutions;
+                best_d = d;
+                Help.Log( (initSolutions.Count, best_d) );
             }
         }
-        var l = hashSet.ToList();
-        for ( int i = 0 ; i < hashSet.Count ; i++ )
-            g += $"N{l[i].Item3}_{l[i].Item1} -> N{l[i].Item3 + 1}_{l[i].Item2};\n";
-        g += "}\n";
-        File.WriteAllText( path, g );
-    }
-    public static void WriteDotFile( this Game game, string path ) {
-        string g = "digraph D {\n";
-        for ( int i = 0 ; i < game.Cs.Length ; ++i ) {
-            var bc = game.Cs.Where(j => j.index != i).MinBy(j => game.W(game.Cs[i].ReadyTime, i, j.index));
-            g += $"N{i} -> N{bc.index};\n";
-            bc = game.Cs.Where( j => j.index != i && j.index != bc.index ).MinBy( j => game.W( game.Cs[i].ReadyTime, i, j.index ) );
-            g += $"N{i} -> N{bc.index};\n";
-            //for ( int j = 0 ; j < game.Cs.Count ; ++j ) {
-            //    if ( i == j )
-            //        continue;
-            //    var w1 = game.W( game.Cs[i].ReadyTime, i, j );
-            //    if (w1 < 10e10) {
-            //        g += $"N{i} -> N{j}[weight=\"{ w1}\"];\n";
-            //    }
-            //}
+        while ( ( DateTime.Now - st ) < timeout ) {
+            for ( int i = 0 ; i < initSolutions.Count ; ++i ) {
+                var smaller = initSolutions[i];
+                Route? routeToAdd = null;
+                for ( int j = 0 ; j < initSolutions.Count ; ++j ) {
+                    if ( i == j )
+                        continue;
+                    var bigger = initSolutions[j];
+                    routeToAdd = null;
+                    if ( bigger.Customers.Count <= smaller.Customers.Count )
+                        continue;
+                    foreach ( var c in smaller.Customers.Where(i => i.index != 0) ) {
+                        routeToAdd = bigger.TryInsertCustomer( game, c );
+                        if ( routeToAdd is not null ) {
+                            swaps++;
+                            initSolutions[i] = new(smaller.Customers.Where(i => i.index != c.index).ToList());
+                            break;
+                        }
+                    }
+                    if ( routeToAdd is not null ) {
+                        initSolutions[j] = routeToAdd;
+                        if ( smaller.Customers.Count == 2 ) {
+                            initSolutions = initSolutions.Where(i => i != smaller).ToList();
+                        }
+                        j = -1;
+                        i = -1;
+                        addIfBetter( initSolutions );
+                        break;
+                    }
+                }
+            }
+            var ns = game.Mix( initSolutions, heat );
+            while (ns == initSolutions) ns = game.Mix( initSolutions, heat );
+            initSolutions = ns;
+            addIfBetter( initSolutions );
+            sinceReset++;
+            if ( heat < Random.Shared.NextDouble( ) ) {
+                initSolutions = best;
+                Help.Log($"reset {sinceReset} {swaps}");
+                swaps = 0;
+                sinceReset = 0;
+            }
         }
-        g += "}\n";
-        File.WriteAllText( path, g );
+        return best;
+    }
+    public static List<Route> Mix(this Game game, List<Route> init, double heat) {
+        var taken = init.OrderByDescending( i => Random.Shared.NextDouble( ) * i.SlackTime() )
+            .Take( Random.Shared.Next( 2, 10 ) ).ToList();
+        var rs = taken
+            .SelectMany(i => i.Customers)
+            .Where(i => i.index != 0)
+            .OrderBy(i => Random.Shared.Next())
+            .Prepend(game.Cs[0])
+            .ToArray();
+        var ret = init.Except(taken).ToList();
+        var g = new Game(game.N, game.C, rs);
+        ret = ret.Concat(g.GetBestRoutes( heat )).ToList();
+        return ret.Count <= init.Count ? 
+            ret : heat < Random.Shared.NextDouble( )  ? 
+            ret : init;
     }
 }

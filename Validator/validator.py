@@ -147,16 +147,11 @@ def validator(**parameters):
             logging.info(f"routes_path = {hmo_out} ({os.path.abspath(hmo_out)})")
 
             vehicle_number, vehicle_capacity, depot, customers = parse_input(hmo_in)
-            print("tu")
             depot = np.array(depot)
-            print("tu")
             customers = np.array(customers)
-            print("tu")
             locations = np.vstack((depot, customers))
-            print("tu")
 
             num_routes, routes, distance = parse_output(hmo_out)
-            print("tu")
             if np.array(validate_output(vehicle_number, vehicle_capacity, depot, customers, num_routes, routes, distance)):
                 logging.info(f"Validation SUCCESSFUL")
             else:
